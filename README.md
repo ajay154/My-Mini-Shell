@@ -46,4 +46,4 @@ It supports history feature. we can see history by typing “history” command 
 It supports TAB auto completion. We can press TAB to auto complete with matching files.<br>
 6.	UP and DOWN to navigate between previous commands :<br>
 
-/*AJAY YADAV M.Tech. CSE Ist Year IIT Roorkee*/
+<h4><b>AJAY YADAV M.Tech. CSE Ist Year IIT Roorkee</b></h5>
