@@ -1,7 +1,8 @@
-MYSHELL-a mini shell
+
+<h1>MYSHELL-a mini shell</h1>
 
 
-Prerequisites:
+Prerequisites:<br>
 Dependency: libreadline6-dev and libreadline6. please install these libraries before running this program.
 in UBUNTU: to install libreadline6 and libreadline6-dev type: 
 sudo apt-get install libreadline6 libreadline6-dev
