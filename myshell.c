@@ -1,3 +1,25 @@
+
+/* ****************************************************MYSHELL - a mini shell *****************************************************************/
+
+/*                                          		 Created by:	
+
+************************************************************************************************************************************************
+****************************************		    AJAY YADAV  				****************************************
+****************************************      ENROLLMENT NUMBER - 14535002 (2014-2016)	         	****************************************
+****************************************      M.Tech. Ist Year ( Computer Science and Engineering)	****************************************
+****************************************      IIT Roorkee , Roorkee , Uttarakhand , India , 247667	****************************************
+************************************************************************************************************************************************
+*/
+
+/* Dependency : libreadline6-dev and libreadline6    .. please install these libraries before running this program.
+    IN UBUNTU:
+			type ..... sudo apt-cache search lreadline          (TO SEARCH LIBRARIES)
+			// 	then install libreadline6 and libreadline6-dev	//
+			type ...   sudo apt-get install libreadline6 libreadline6-dev
+*/
+
+/* HEADER FILEs */
+
 #include<stdio.h>
 #include<unistd.h>
 #include <sys/types.h>
@@ -15,6 +37,8 @@
 #include<signal.h>
 #include <termios.h>
 
+/*MACROS DEFINITION */
+
 #define MAX_ARGS 20
 #define MAX_PATHS 20
 #define MAX_LINE 80
@@ -24,11 +48,13 @@
 
 #define FOREGROUND 'F'
 #define BACKGROUND 'B'
+#define STOP 'S'
 
 #define STDIN 1
 #define STDOUT 2
 
-#define debug 0
+
+/*JOB STRUCTURE */
 
 typedef struct job
 {
@@ -45,6 +71,8 @@ typedef struct job
 
 static job* JobList = NULL;
 
+/*Command Variables */
+
 char name[MAX_NAME];
 int cmdcount;
 char **cmd;
@@ -53,15 +81,62 @@ char *line , hostname[50] , cwd[50] ;
 struct passwd *passwd;
 int status;
 
-static pid_t SHELL_PID;
-static pid_t SHELL_PGID;
-static int SHELL_TERMINAL, IS_INTERACTIVE_SHELL;
-static int CHILD_PGID;
+/*Pipes and Redirection Variables*/
+
+int inbuilt_function_flag=0;
+int pipeloc[32],infileloc[32],outfileloc[32];
+int numpipe=0,numout=0,numin=0;
+int haveoutfile[32],haveinfile[32];
+int processno=0;
+int isbg;
+
+/*JOB CONTROLLING VARIABLES */
+
+static pid_t shell_pid;
+static pid_t shell_pgid;
+static int shell_terminal, is_shell_interactive;
+static int child_pgid;
 static int numActiveJobs = 0;
 int executionMode=FOREGROUND;
 
-char * stripwhite (string)
-char *string;
+/* PARSING COMPONENTS */
+
+void init();
+void parser();
+char * stripwhite (char *);
+void Pipe_and_Redirection();
+void createWelcomeString();
+void checkExit();
+
+/* BUILTIN FUNCTIONS HANDLING COMPONENT */
+
+int isBuiltIn();
+void clearScreen();
+void changeDir(char *);
+void makeDir();
+void rmDir();
+void echoDollar();
+void showhistory();
+void executehistory(int );
+
+/* JOB CONTROLLING COMPONENT */
+
+int delJob(int ,int * );
+void printStatus(job * ,int * );
+job* newJob(pid_t , pid_t , pid_t , char* , char* ,char* ,int );
+job* insertJob(pid_t , pid_t , pid_t , char* , char* ,char* ,int );
+void printJobs();
+void freeJobs();
+
+/* SIGNAL HANDLERS */
+
+void sigchld_handler(int );
+void sigquit_handler(int );
+void sigtstp_handler(int );
+
+/* Function to remove whitespace from both side of a string */
+
+char * stripwhite (char* string)
 {
     register char *s, *t;
 
@@ -79,6 +154,7 @@ char *string;
     return s;
 }
 
+/* Function to get input through GNU Readline Library */
 
 static char *line_read = (char *)NULL;
 
@@ -90,42 +166,17 @@ char * Gets (char string[150])
         line_read = (char *)NULL;
     }
     line_read = readline (string);
-    //strcat(ch,line_read);
     return (line_read);
 }
-/*
-int getPathofCommand()
-{
-    char *path;
-    path=getenv("PATH");
-    char *pathv;
-    char strpath[MAX_PATHS];
-    pathv=strtok(path,":");
-    while(pathv!=NULL)
-    {
-        sprintf(strpath,"%s/%s",pathv,cmd[0]);
-        //printf("%s\n",strpath);
-        if(access(strpath,X_OK)==0)
-        {
-            strcpy(name,strpath);
-            return 1;
-        }
-        pathv=strtok(NULL,":");
-    }
-    strcpy(name,cmd[0]);
-    return 0;
-}*/
 
-/*int processCommand()
-{
-    execve(name,cmd,0);
-    return 0;
-}
-*/
+/*BUILTIN FUNCTION - used to clear screen */
+
 void clearScreen()
 {
     printf("\033[2J\033[1;1H");
 }
+
+/* Function to change Directory */
 
 void changeDir(char * argv)
 {
@@ -140,21 +191,10 @@ void changeDir(char * argv)
             printf(" %s: no such directory\n", argv);
         }
     }
-    char cwd[50];
-    getcwd(cwd,50);
-    //printf("CWD is %s\n",cwd);
-    if(!strncmp(cwd, "/home",5))
-    {
-        char * tempcwd=strchr(strchr(cwd+1,'/')+1,'/');
-        sprintf(cwd,"~%s",tempcwd==NULL?"":tempcwd);
-    }
-    if(cwd==NULL)
-    {
-        strcpy(cwd,"");
-    }
-    sprintf(welcomestring,"%s@%s:%s$ ",passwd->pw_name,hostname,cwd);
-    //printf("CWD is %s\n",cwd);
+	createWelcomeString();
 }
+
+/* Function to Make a Directory */
 
 void makeDir()
 {
@@ -168,6 +208,8 @@ void makeDir()
     }
 }
 
+/* Function to Remove a Directory */
+
 void rmDir()
 {
     if (strncmp(cmd[0], "rmdir", 5) == 0)
@@ -179,6 +221,7 @@ void rmDir()
         }
     }
 }
+/* Function for BUILTIN echo i.e for echo $variable or echo $$ */
 
 void echoDollar()
 {
@@ -188,7 +231,6 @@ void echoDollar()
         {
             char *echo_str = (char *)malloc(sizeof(strlen(cmd[1])));
             strcpy(echo_str, cmd[1]);
-            //printf("%s\n",echo_str);
             if (strcmp(echo_str,"$$") == 0)
             {
                 printf("PID: %d\n", getpid());
@@ -205,7 +247,6 @@ void echoDollar()
             if(!strncmp(echo_str,"$",1))
             {
                 char *path;
-                //printf("yes\n");
                 path=getenv(echo_str+1);
                 printf("%s\n",path);
                 return;
@@ -213,6 +254,32 @@ void echoDollar()
         }
     }
 }
+
+/*Funtion to Add Command to History */
+
+void Add_history()
+{
+	if(!strncmp("!",line,1))
+	{
+		if(!strncmp("!",line+1,1))
+		{
+			register HIST_ENTRY * hist;
+			hist=history_get(history_length);
+			add_history(hist->line);
+			return;
+		}
+		register HIST_ENTRY * hist;
+		int offset=atoi(line+1);
+		hist=history_get(offset-history_base+1);
+		add_history(hist->line);
+		return;
+	}
+	add_history(line);
+	return;
+}
+
+/* Function to show History */
+
 void showhistory()
 {
     register HIST_ENTRY **the_list;
@@ -224,27 +291,22 @@ void showhistory()
             printf ("%d: %s\n", i + history_base, the_list[i]->line);
 }
 
+/* Function to Execute command of type !n */
+
 void executehistory(int offset)
 {
     register HIST_ENTRY *hist;
     hist= history_get (offset-history_base+1);
     line=hist->line;
-    char *pch;
-    pch=strtok(line," ");
-    int i=0;
-    while(pch!=NULL)
-    {
-        cmd[i++]=pch;
-        pch=strtok(NULL," ");
-    }
-    cmdcount=i;
-    cmd[i++]=NULL;
+    parser();
+    if(isBuiltIn())
+		inbuilt_function_flag=1;
 }
 
+/* Function to print a Job Status after Exiting */
 
 void printStatus(job * job,int * termstatus)
 {
-    //printf("Status= %d\n",*termstatus);
     if (WIFEXITED(*termstatus))
     {
         if (job->status == BACKGROUND)
@@ -260,11 +322,13 @@ void printStatus(job * job,int * termstatus)
     {
         if(job->status=FOREGROUND)
         {
-            tcsetpgrp(SHELL_TERMINAL, job->pgid);
+            tcsetpgrp(shell_terminal, job->pgid);
             printf("\n[%d]+   stopped\t   %s\n", numActiveJobs, job->name);
         }
     }
 }
+
+/* Function to delete a job from JOB LIST */
 
 int delJob(int pid,int * termstatus)
 {
@@ -290,7 +354,6 @@ int delJob(int pid,int * termstatus)
     prevJob=JobList;
     while (tempJob != NULL)
     {
-        //printf("yes\n");
         if(tempJob->pid==pid)
         {
             prevJob->next=tempJob->next;
@@ -303,39 +366,42 @@ int delJob(int pid,int * termstatus)
     return 0;
 }
 
-void catcher(int signum)
+/* SIGCHLD HANDLER for background Processes */
+
+void sigchld_handler(int signum)
 {
     int ppid=-1;
     static int termstatus;
     if((ppid=waitpid(-1,&termstatus,WNOHANG))>0)
         delJob(ppid,&termstatus);
-    tcsetpgrp(SHELL_TERMINAL,SHELL_PGID);
-//printf("int catcher PID %d Exit %x \n",ppid,termstatus);
+    tcsetpgrp(shell_terminal,shell_pgid);
 }
+
+/*Function to init SHELL PROGRAM */
 
 void init()
 {
-    SHELL_PID = getpid();
-    SHELL_TERMINAL = STDIN_FILENO;
-    IS_INTERACTIVE_SHELL = isatty(SHELL_TERMINAL);
-    if (IS_INTERACTIVE_SHELL)
+    shell_pid = getpid();
+    shell_terminal = STDIN_FILENO;
+    is_shell_interactive = isatty(shell_terminal);
+    if (is_shell_interactive)
     {
-        while (tcgetpgrp(SHELL_TERMINAL) != (SHELL_PGID = getpgrp()))
-            kill(SHELL_PID, SIGTTIN);
+        while (tcgetpgrp(shell_terminal) != (shell_pgid = getpgrp()))
+            kill(shell_pid, SIGTTIN);
         signal(SIGQUIT, SIG_IGN);
         signal(SIGTTOU, SIG_IGN);
         signal(SIGTTIN, SIG_IGN);
         signal(SIGTSTP, SIG_IGN);
         signal(SIGINT, SIG_IGN);
-        signal(SIGCHLD,&catcher);
-        setpgid(SHELL_PID, SHELL_PID);
-        SHELL_PGID = getpgrp();
-        if (SHELL_PID != SHELL_PGID)
+        signal(SIGCHLD,&sigchld_handler);
+        setpgid(shell_pid, shell_pid);
+        shell_pgid = getpgrp();
+        if (shell_pid != shell_pgid)
         {
             printf("Error, the shell is not process group leader");
             exit(EXIT_FAILURE);
         }
-        tcsetpgrp(SHELL_TERMINAL, SHELL_PGID);
+        tcsetpgrp(shell_terminal, shell_pgid);
     }
     else
     {
@@ -343,6 +409,8 @@ void init()
         exit(EXIT_FAILURE);
     }
 }
+
+/* Function to create a new job with given values */
 
 job* newJob(pid_t pid, pid_t ppid, pid_t pgid, char* name, char* infile,char* outfile ,int status)
 {
@@ -361,9 +429,10 @@ job* newJob(pid_t pid, pid_t ppid, pid_t pgid, char* name, char* infile,char* ou
     return tempJob;
 }
 
+/*Function to insert a new job to JOB list */
+
 job* insertJob(pid_t pid, pid_t ppid, pid_t pgid, char* name, char* infile,char* outfile ,int status)
 {
-    // usleep(10000);
 
     job *tempJob;
     tempJob=newJob(pid,ppid,pgid,name,infile,outfile,status);
@@ -392,6 +461,8 @@ job* insertJob(pid_t pid, pid_t ppid, pid_t pgid, char* name, char* infile,char*
 }
 
 
+/* Function to print JOBS when "jobs" command will be executed */
+
 void printJobs()
 {
     job* Job = JobList;
@@ -404,12 +475,13 @@ void printJobs()
     printf("---------------------------------------------------------------------------\n");
     while (Job != NULL)
     {
-        //printf("yes\n");
         printf("|  %7d | %30s | %5d | %5d | %5d | %10s | %10s | %6c |\n", Job->id, Job->name, Job->ppid ,Job->pid,Job->pgid, Job->infile, Job->outfile, Job->status);
         Job = Job->next;
     }
     printf("---------------------------------------------------------------------------\n");
 }
+
+/* Funtion to free JOB LIST when program will be exiting */
 
 void freeJobs()
 {
@@ -422,6 +494,9 @@ void freeJobs()
         free(tempjob);
     }
 }
+
+
+/* Function to check and Execute BUILTIN commands */
 
 int isBuiltIn()
 {
@@ -455,89 +530,46 @@ int isBuiltIn()
         echoDollar();
         return 1;
     }
-    if(!strcmp("!!",cmd[0])||!strcmp("history", cmd[0]))
+    if(!strcmp("history", cmd[0]))
     {
         showhistory();
         return 1;
     }
     if(strncmp("!", cmd[0],1) == 0)
     {
+	if(!strncmp("!",cmd[0]+1,1))
+	{
+		executehistory(history_length-1);
+		return 0;
+	}
         executehistory(atoi(cmd[0]+1));
         return 0;
     }
     return 0;
 }
 
+/* Function to parse the given command and generate tokens */
 
-int main()
-{
-    int i,j,k;
-    char ch;
-    pid_t child_pid;
-    init();
-    cmd = (char **) malloc(32 * sizeof(char *));
-    gethostname(hostname,50);
-    passwd = getpwuid(getuid());
-    printf("--------------------------------------Welcome to MYSHELL--------------------------------------------------- \n");
-    getcwd(cwd,50);
-    if(!strncmp(cwd, "/home",5))
-    {
-        char * tempcwd=strchr(strchr(cwd+1,'/')+1,'/');
-        sprintf(cwd,"~%s$ ",tempcwd==NULL?"":tempcwd);
-    }
-    if(cwd==NULL)
-    {
-        strcpy(cwd,"");
-    }
-    sprintf(welcomestring,"%s@%s:%s$ ",passwd->pw_name,hostname,cwd);
-    while(1)
-    {
-        int isbg=0;
-        int fd1[2]  = { -1, -1 };
-        int fd2[2] = { -1, -1 };
-        //printf("$");
-        //fgets(line,sizeof(line),stdin);
-        //printf("%s",welcomestring);
-        line = Gets (welcomestring);
-        int len=(int)strlen(line);
-        //if (len<1)
-        //continue;
-        line = stripwhite (line);
-        if(!*line)
-            continue;
-        else
-        {
-            add_history (line);
-        }
-        char *pch;
-        pch=strtok(line," ");
-        i=0;
+void parser(){
+	char *pch;
+	char *saveptr;
+        pch=strtok_r(line," ",&saveptr);
+        int i=0;
         while(pch!=NULL)
         {
             cmd[i++]=pch;
-            pch=strtok(NULL," ");
+            pch=strtok_r(NULL," ",&saveptr);
         }
         cmdcount=i;
         cmd[i++]=NULL;
-        //printf("i=%d\n",i);
-        if(!strcmp(cmd[0],"exit")||!strcmp( cmd[0],"quit"))
-        {
-            printf("exiting..........\n");
-            freeJobs();
-            exit(0);
-        }
-        if(isBuiltIn())
-        {
-            continue;
-        }
-        //printf
-        int pipeloc[32],infileloc[32],outfileloc[32];
-        int numpipe=0,numout=0,numin=0;
-        pipeloc[numpipe]=0;
-        int haveoutfile[32],haveinfile[32];
-        int processno=0;
-        haveinfile[processno]=haveoutfile[processno]=0;
-        for(k=0; k<cmdcount; k++)
+}
+
+/* Function to Mark Pipes and redirection in Command */
+
+void Pipe_and_Redirection()
+{
+  int k;
+  for(k=0; k<cmdcount; k++)
         {
             if(!strcmp( cmd[k],"|"))
             {
@@ -570,38 +602,94 @@ int main()
                 cmd[k]=NULL;
             }
         }
-        //printf("igbg= %d\n",isbg);
-        if(isbg==1) continue;
+}
+
+/* Function for checking EXIT/QUIT command */
+void checkExit()
+{
+        if(!strcmp(cmd[0],"exit")||!strcmp( cmd[0],"quit"))
+        {
+            printf("exiting..........\n");
+            freeJobs();
+            exit(0);
+        }
+}
+
+/*Function to create Welcome String i.e prompt */
+
+void createWelcomeString()
+{
+    gethostname(hostname,50);
+    passwd = getpwuid(getuid());
+    getcwd(cwd,50);
+    if(!strncmp(cwd, strcat(strdup("/home/"),passwd->pw_name) ,6+strlen(passwd->pw_name)))
+    {
+        char * tempcwd=strchr(strchr(cwd+1,'/')+1,'/');
+        sprintf(cwd,"~%s$ ",tempcwd==NULL?"":tempcwd);
+    }
+    if(cwd==NULL)
+    {
+        strcpy(cwd,"");
+    }
+    sprintf(welcomestring,"%s@%s:%s$ ",passwd->pw_name,hostname,cwd);
+}
+
+/* MAIN FUNCTION */
+
+int main()
+{
+    int i,j,k;
+    char ch;
+    pid_t child_pid;
+    init();
+    cmd = (char **) malloc(32 * sizeof(char *));
+
+    printf("--------------------------------Welcome to MYSHELL-a mini shell---------------------------------------------\n");
+
+    printf("--------------------------------------AJAY YADAV , IITR-----------------------------------------------------\n");
+    
+    createWelcomeString();
+    
+    while(1)
+    {
+        isbg=0;										/*checking for backgorund i.e & */
+	inbuilt_function_flag=0;
+        int fd1[2]  = { -1, -1 }; 							/*for memorizing previos pipes */
+        int fd2[2] = { -1, -1 };							/*for creating pipe for every process */
+        line = Gets (welcomestring);							/* reading the command */
+        int len=(int)strlen(line);							
+        line = stripwhite (line);							/* removing Whitespaces both side */
+        if(!*line)
+            continue;									/*if NULL string then continue again */
+        else
+        {
+            Add_history ();								/*ADD to history */
+        }
+
+        parser();									/*parsing command and tokenizing */
+	
+	checkExit();									/*checking for Exit command */	
+
+        if(isBuiltIn())						/*if BUILTIN command then continue and process them in isBuiltIn Funtion */
+        {
+            continue;
+        }
+	numpipe=0,numout=0,numin=0;				/*initializing Number of pipe , output redirection and input redirection to 0*/
+	pipeloc[numpipe]=0;
+	processno=0;
+	haveinfile[processno]=haveoutfile[processno]=0;		/*to account for all the pipe command that if they have inFILE or outFile */
+
+	Pipe_and_Redirection();					/* to Store Pipelocation and Input and Output Redirection Places */
+
+        if(isbg==1) continue;					/*if Wrong syntax i.e. & placed between commands then continue */
+	if(inbuilt_function_flag) continue;			/*if inbuilt function then continue */
         pipeloc[numpipe+1]=cmdcount;
         i=cmdcount+1;
-        //cmd1=&cmd;
-        if(debug)
-        {
-            printf("Array size: %i\n", sizeof(* cmd));
-            for(j=0; j<i; j++)
-            {
-                printf("command->cmd[%i] = %s\n", j,  cmd[j]);
-            }
-            printf("\ncommand->cmdcount = %i\n",  cmdcount);
-            printf("PIPE LOCATION\n");
-            for(j=0; j<=numpipe; j++)
-                printf("%d\n",pipeloc[j]);
-            printf("INPUT LOC\n");
-            for(j=0; j<numin; j++)
-                printf("%d\n",infileloc[j]);
-            printf("OUTPUT LOC\n");
-            for(j=0; j<numout; j++)
-                printf("%d\n",outfileloc[j]);
-            for(j=0; j<=processno; j++)
-            {
-                printf("INFILE = %d OUTFILE= %d\n" , haveinfile[j],haveoutfile[j]);
-            }
-        }
         int l=0,m=0;
-        for (j = 0; j <= numpipe; j++)
+        for (j = 0; j <= numpipe; j++)				/*create number_of_pipe +1 process */
         {
 
-            if (j != numpipe)
+            if (j != numpipe)					/*if not last process */
             {
                 if (numpipe > 0)
                 {
@@ -609,57 +697,57 @@ int main()
                         perror("pipe error");
                 }
             }
-            if ((child_pid = fork()) < 0)
+            if ((child_pid = fork()) < 0)			/*forking to create child */
                 perror("fork failed");
-            else if (child_pid == 0)
+            else if (child_pid == 0)				/*if it is child */
             {
-                //sleep(0.5);
-                signal(SIGINT, SIG_DFL);
+                signal(SIGINT, SIG_DFL);                        /*Handling Signals */
                 signal(SIGQUIT, SIG_DFL);
                 signal(SIGTSTP, SIG_DFL);
                 signal(SIGTTIN, SIG_DFL);
-
+		signal(SIGCHLD,&sigchld_handler);
                 int process_start;
                 int flag1=0,flag2=0;
-                if(haveinfile[j])
+                if(haveinfile[j])  					/*if HAVE INPUT FILE Redirection then redirect from file */
                 {
                     int fdin=open(cmd[haveinfile[j]],O_RDONLY);
                     dup2(fdin, 0);
                     close(fdin);
                 }
-                if(haveoutfile[j])
+                if(haveoutfile[j])					/*if HAVE OUTPUT FILE Redirection then redirect to file */
                 {
                     int fdout=creat(cmd[haveoutfile[j]],0644);
                     dup2(fdout,1);
                     close(fdout);
                 }
-                if (j != numpipe && !haveoutfile[j])
+                if (j != numpipe && !haveoutfile[j])		/*if not last process and have no output file then redirect to next pipe */
                 {
                     dup2(fd2[1], 1);
                     close(fd2[0]);
                     close(fd2[1]);
                 }
 
-                if (j != 0 && !haveinfile[j])
+                if (j != 0 && !haveinfile[j])			/*if not first process and have no input file then redirect from previous pipe */
                 {
                     dup2(fd1[0], 0);
                     close(fd1[0]);
                     close(fd1[1]);
                 }
-                //printf("11\n");
-                process_start = pipeloc[j];
-                //sleep(10);
-                execvp(cmd[process_start], & cmd[process_start]);
+                    process_start = pipeloc[j];						/*next pipe command location */
+                execvp(cmd[process_start], & cmd[process_start]); 			    /*execute current command */
                 fprintf(stderr, "exec failed\n");
-                exit(EXIT_SUCCESS);
-            }
-            if(isbg==2)
-            {
-                setpgid(child_pid,child_pid);
-                tcsetpgrp(SHELL_TERMINAL,SHELL_PGID);
+                exit(EXIT_SUCCESS);                               			  /*if Execution failed */
             }
 
-            if (j != 0)
+	/* PARENT PROCESS */
+
+            if(isbg==2)							/*if background process ,create its own group */
+            {
+                setpgid(child_pid,child_pid);
+                tcsetpgrp(shell_terminal,shell_pgid);
+            }
+
+            if (j != 0)							/*if not first process close previous pipe to decrease refrence count */
             {
                 assert(fd1[0] != -1 && fd1[1] != -1);
                 close(fd1[0]);
@@ -667,63 +755,50 @@ int main()
 
             }
 
-            if(debug) printf("PID %d launched\n", child_pid);
-            fd1[0] = fd2[0];
+            fd1[0] = fd2[0];						/*copy current pipe to memrize for next command */
             fd1[1] = fd2[1];
             char *inFile,*outFile;
-            if(haveinfile[j])
+            if(haveinfile[j])						/*if Have input file */
             {
                 inFile=cmd[haveinfile[j]];
             }
-            else
+            else							/*else input file is STDIN */
             {
                 inFile=malloc(6);
                 strcpy(inFile,"STDIN");
             }
-            if(haveoutfile[j])
+            if(haveoutfile[j])						/*if Have Output file */
             {
                 outFile=cmd[haveoutfile[j]];
             }
-            else
+            else							/*else  output file is STDOUT */
             {
                 outFile=malloc(7);
                 strcpy(outFile,"STDOUT");
             }
-            if(isbg==0)
-                if(j==0)
+            if(isbg==0)							/*if foreground process */		
+                if(j==0)						/*if first program */
                 {
                     setpgid(child_pid,child_pid);
-                    tcsetpgrp(SHELL_TERMINAL,child_pid);
-                    CHILD_PGID=child_pid;
-                    //CHILD_SID=getsid();
-                }
-                else
+                    tcsetpgrp(shell_terminal,child_pid);
+                    child_pgid=child_pid;
+                 }
+                else							/*else than first program */
                 {
-                    if(debug)
-                    {
-                        printf("CH-SID %d NEW %d \n",getsid(CHILD_PGID),getsid(child_pid));
-                        //perror(strerror(errno));
-                        printf("in CHILD_PGID= %d\n",CHILD_PGID);
-                    }
-                    //printf("setpgid = %d\n",setgid(CHILD_PGID));
-                    setpgid(child_pid,CHILD_PGID);
+                                      setpgid(child_pid,child_pgid);
 
                 }
+		/*insert the job in JOB LIST */
             JobList = insertJob(child_pid,getpid(), getpgid(child_pid), cmd[pipeloc[j]], inFile, outFile ,(isbg==2)?BACKGROUND:FOREGROUND);
 
             pid_t ppid;
-            if(debug) printf("TCGETPGRP= %d\n",tcgetpgrp(SHELL_TERMINAL));
+		/* if foreground process wait for child*/
             if(isbg!=2)
-                if((ppid=waitpid(child_pid,&status,0))!=-1)
+                if((ppid=waitpid(child_pid,&status,0))!=-1)			 /* Wait for child */
                 {
-                    //printf("PID %d Exit %x\n",ppid,status);
-                    delJob(child_pid,&status);
-                    tcsetpgrp(SHELL_TERMINAL,SHELL_PGID);
-                }
-            //tcsetpgrp(SHELL_TERMINAL,SHELL_PGID);
-            if(debug) printJobs();
-            //freeJobs();
-            //sleep(1000);
+                    delJob(child_pid,&status);					 /*delete from JOB LIST */
+                    tcsetpgrp(shell_terminal,shell_pgid);			 /*set terminal to shell program*/
+                }			
         }
     }
     return 0;
